@@ -4,24 +4,32 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Callable, TypeAlias
-
 import torch
 import torch.nn.functional as F
 from torchtitan.config import JobConfig
 from torchtitan.tools.logging import logger
 
-LossFunction: TypeAlias = Callable[..., torch.Tensor]
+
+def stft_mag_loss(esti, label):
+    """
+    esti : b, f, t, 2
+    label: b, f, t, 2
+    """
+    mag_esti, mag_label = torch.norm(esti, dim=-1), torch.norm(label, dim=-1)
+    loss = F.mse_loss(mag_esti, mag_label)
+    return loss
 
 
-def mse_loss(pred: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-    """Common MSE loss function for Transformer models training."""
-    return 0.5*F.mse_loss(pred.float(), labels.float().detach())+0.5*F.l1_loss(pred.float(), labels.float().detach())
-
+def stft_loss(esti, label):
+    """
+    esti : b, f, t, 2
+    label: b, f, t, 2
+    """
+    return 0.5 * F.mse_loss(esti, label) + 0.5 * stft_mag_loss(esti, label)
 
 
 def build_mse_loss(job_config: JobConfig):
-    loss_fn = mse_loss
+    loss_fn = stft_loss
     if job_config.compile.enable and "loss" in job_config.compile.components:
         logger.info("Compiling the loss function with torch.compile")
         loss_fn = torch.compile(loss_fn)
