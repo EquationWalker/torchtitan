@@ -5,8 +5,11 @@
 # LICENSE file in the root directory of this source tree.
 
 import torch
-import torch
+import scipy.signal as signal
 from einops import rearrange
+import numpy as np
+from functools import partial
+import json
 
 def sqrt_compress(x):
     '''
@@ -75,6 +78,54 @@ def sqrt_decomp_then_istft(x, is_multi_channel, sr, win_size_sec, win_shift_sec,
     
     return y
 
+
+def resample(audio, current_sr, target_sr):
+    n = audio.shape[0]
+    if len(audio.shape)==2:
+        assert audio.shape[1]<10, ('maybe (not) an error, check audio shape', audio.shape)
+    if current_sr!=target_sr:
+        audio = signal.resample(audio, int(n*target_sr/current_sr))
+    return audio
+
+
+MODEL_TO_DEVICE = 'model to device'
+DEVICE_TO_MODEL = 'device to model'
+
+def cal_take_indices(src_mics, tgt_mics):
+    assert len(src_mics)==len(tgt_mics), (src_mics,tgt_mics)
+    take_indices = []
+    for p in tgt_mics:
+        found = False
+        for i,s in enumerate(src_mics):
+            if p == s:
+                take_indices.append(i)
+                found = True
+                break
+        assert found, (src_mics, tgt_mics, p)
+    assert len(set(take_indices))==len(tgt_mics), (src_mics,tgt_mics,take_indices)
+    return take_indices
+
+
+def converter(wav, take_indices):
+    assert len(wav.shape) == 2, wav.shape
+    assert wav.shape[1] == len(take_indices), (wav.shape,'expect wav to be (n,c)')
+    return np.take(wav, take_indices, axis=1)
+
+
+def make_converter(type, mcse_settings_path, device_mics):
+    with open(mcse_settings_path, 'r') as f:
+        opt = json.load(f)
+    model_mics = opt['mic_array']['mics']
+    if type == MODEL_TO_DEVICE:
+        take_indices = cal_take_indices(model_mics, device_mics)
+    elif type == DEVICE_TO_MODEL:
+        take_indices = cal_take_indices(device_mics, model_mics)
+    else:
+        raise ValueError(type)
+    
+    print(f'make converter, type: {type}, take_indices: {take_indices}')
+    
+    return partial(converter, take_indices=take_indices)
 
 
 if __name__ == "__main__":
