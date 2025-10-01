@@ -320,7 +320,6 @@ class TransformerBlock(nn.Module):
         for norm in (self.attention_norm, self.ffn_norm):
             norm.reset_parameters()
         self.attention.init_weights(self.weight_init_std)
-  
         self.feed_forward.init_weights(self.weight_init_std)
 
 
@@ -361,7 +360,7 @@ class EaBNetQwen3(nn.Module, ModelProtocol):
             self.layers[str(layer_id)] = TransformerBlock(layer_id, model_args)
         self.norm = nn.RMSNorm(model_args.dim, eps=model_args.norm_eps)
 
-        self.output = nn.Linear(model_args.dim, model_args.F, bias=False)
+        self.output = nn.Linear(model_args.dim, in_dim, bias=False)
 
     def init_weights(
         self,
@@ -408,10 +407,7 @@ class EaBNetQwen3(nn.Module, ModelProtocol):
             self.model_args.rope_theta,
         )
 
-    def forward(
-        self,
-        tokens: torch.Tensor
-    ):
+    def forward(self, tokens: torch.Tensor):
         """
         Perform a forward pass through the Transformer model.
 
@@ -430,23 +426,23 @@ class EaBNetQwen3(nn.Module, ModelProtocol):
 
         """
         # print(f"Debug-1 {tokens.shape}")
-        tokens = rearrange(tokens, 'b m f t i->b (i t) (m f)').contiguous()
+        tokens = rearrange(tokens, "b m f t i->b (i t) (m f)").contiguous()
         # print(f"Debug-2 {tokens.shape}")
-        h = self.tok_embeddings(tokens) 
+        h = self.tok_embeddings(tokens)
 
         for layer in self.layers.values():
             h = layer(h, self.rope_cache)
 
         h = self.norm(h) if self.norm else h
         output = self.output(h) if self.output else h
-        output = rearrange(output, 'b (i t) f -> b f t i', i=2)
+        output = rearrange(output, "b (i t) (m f) -> b t f m i", i=2, m=self.model_args.M)
         # print(f"output {output.shape}")
-        
-        
-        # inpt = rearrange(tokens, 'b (i t) (m f)->b t f m i', i=2, m=self.model_args.M)
-        # bf_w_r, bf_w_i = output[...,0], output[...,-1]
-        # esti_x_r, esti_x_i = (bf_w_r*inpt[...,0]-bf_w_i*inpt[...,-1]).sum(dim=-1), \
-        #                         (bf_w_r*inpt[...,-1]+bf_w_i*inpt[...,0]).sum(dim=-1)
-        # esti_stft = torch.stack((esti_x_r, esti_x_i), dim=1)
-        # esti_stft = rearrange(esti_stft, 'b c t f -> b f t c')
-        return output
+
+        inpt = rearrange(tokens, "b (i t) (m f) -> b t f m i", i=2, m=self.model_args.M)
+        bf_w_r, bf_w_i = output[..., 0], output[..., -1]
+        esti_x_r, esti_x_i = (bf_w_r * inpt[..., 0] - bf_w_i * inpt[..., -1]).sum(
+            dim=-1
+        ), (bf_w_r * inpt[..., -1] + bf_w_i * inpt[..., 0]).sum(dim=-1)
+        esti_stft = torch.stack((esti_x_r, esti_x_i), dim=1)
+        esti_stft = rearrange(esti_stft, "b c t f -> b f t c")
+        return esti_stft
